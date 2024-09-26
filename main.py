@@ -3,13 +3,19 @@ import requests
 import pandas as pd
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
+from git import Repo
+import tempfile
 
 load_dotenv()
 GITHUB_TOKEN = os.getenv("_GITHUB_TOKEN")
 GITHUB_REPO = os.getenv("_GITHUB_REPO")
 BRANCH_NAME = os.getenv("_BRANCH_NAME")
-GITHUB_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/contents"
 url = os.getenv("_STEAM_WORKSHOP")
+
+if url is None:
+    print("Error: _STEAM_WORKSHOP is not set in the environment.")
+    exit()
+
 response = requests.get(url)
 if response.status_code == 200:
     soup = BeautifulSoup(response.content, 'html.parser')
@@ -24,44 +30,28 @@ else:
     print("Failed to retrieve the webpage. Status code:", response.status_code)
     exit()
 
+TEMP_DIR = tempfile.mkdtemp()
+Repo.clone_from(f'https://{GITHUB_TOKEN}@github.com/{GITHUB_REPO}.git', TEMP_DIR, branch=BRANCH_NAME)
+csv_filename = os.path.join(TEMP_DIR, "subscriber_count.csv")
 
-csv_filename = "subscriber_count.csv"
-response = requests.get(f"{GITHUB_API_URL}/{csv_filename}", headers={"Authorization": f"token {GITHUB_TOKEN}"})
-if response.status_code == 200:
-    
-    file_content = response.json()['content']
-    decoded_content = requests.utils.unquote(file_content)
-    df = pd.read_csv(pd.compat.StringIO(decoded_content))
+if os.path.exists(csv_filename) and os.path.getsize(csv_filename) > 0:
+    df = pd.read_csv(csv_filename)
 else:
-    
     df = pd.DataFrame()
 
 current_id = url.split("id=")[-1]
+
 if current_id in df.columns:
-    empty_index = df[current_id].first_valid_index()
-    if empty_index is not None:
-        new_index = empty_index + 1
-        df.at[new_index, current_id] = current_subscribers
-    else:
-        df.loc[len(df), current_id] = current_subscribers
+    new_index = df[current_id].last_valid_index() + 1 if df[current_id].last_valid_index() is not None else 0
+    df.at[new_index, current_id] = current_subscribers
 else:
     df[current_id] = [current_subscribers]
 
-csv_buffer = df.to_csv(index=False)
-commit_message = "Update subscriber count"
-upload_url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{csv_filename}"
+df.to_csv(csv_filename, index=False)
 
+repo = Repo(TEMP_DIR)
+repo.git.add(csv_filename)
+repo.index.commit("Update subscriber count")
+repo.git.push("origin", BRANCH_NAME)
 
-upload_response = requests.put(upload_url, headers={
-    "Authorization": f"token {GITHUB_TOKEN}",
-    "Content-Type": "application/json"
-}, json={
-    "message": commit_message,
-    "content": requests.utils.quote(csv_buffer.encode('utf-8').decode('utf-8')),
-    "sha": response.json().get("sha") if response.status_code == 200 else None
-})
-
-if upload_response.status_code in (201, 200):
-    print("CSV updated successfully.")
-else:
-    print("Failed to update the CSV on GitHub. Status code:", upload_response.status_code)
+print("CSV updated and pushed successfully.")

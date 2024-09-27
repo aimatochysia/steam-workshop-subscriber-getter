@@ -5,6 +5,7 @@ from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 from git import Repo
 import tempfile
+from io import StringIO
 
 load_dotenv()
 GITHUB_TOKEN = os.getenv("_GITHUB_TOKEN")
@@ -21,6 +22,7 @@ if response.status_code == 200:
     soup = BeautifulSoup(response.content, 'html.parser')
     tr_elements = soup.find_all('tr')
     current_subscribers = None
+    
     for tr in tr_elements:
         td_elements = tr.find_all('td')
         if len(td_elements) == 2 and "Current Subscribers" in td_elements[1].text:
@@ -40,18 +42,26 @@ else:
     df = pd.DataFrame()
 
 current_id = url.split("id=")[-1]
-
 if current_id in df.columns:
     new_index = df[current_id].last_valid_index() + 1 if df[current_id].last_valid_index() is not None else 0
     df.at[new_index, current_id] = current_subscribers
 else:
     df[current_id] = [current_subscribers]
 
-df.to_csv(csv_filename, index=False)
+csv_content = StringIO()
+df.to_csv(csv_content, index=False)
+csv_content.seek(0)
 
-repo = Repo(TEMP_DIR)
-repo.git.add(csv_filename)
-repo.index.commit("Update subscriber count")
-repo.git.push("origin", BRANCH_NAME)
+def push_to_github(filename, content):
+    file_path = os.path.join(TEMP_DIR, filename)
+    with open(file_path, 'w') as file:
+        file.write(content.getvalue())
+        
+    repo = Repo(TEMP_DIR)
+    repo.index.add([file_path])
+    repo.index.commit(f'Update {filename}')
+    origin = repo.remote(name='origin')
+    origin.push()
 
+push_to_github("subscriber_count.csv", csv_content)
 print("CSV updated and pushed successfully.")
